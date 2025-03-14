@@ -1,0 +1,127 @@
+#include <Wire.h>
+#include <MPU6050.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
+
+MPU6050 mpu;
+const int vibrationPin = 23;  // Pin connected to SW-420 Vibration Sensor
+const int buzzerPin = 25;     // Pin connected to Buzzer
+const int switchPin = 26;     // Pin connected to Reset Switch
+const int ledPin = 27;        // Pin connected to LED Indicator
+
+bool alertTriggered = false;
+unsigned long alertStartTime = 0;
+
+const char* ssid = "Tushar";         // Your WiFi SSID
+const char* password = "Monu12345";  // Your WiFi Password
+const String smsApiKey = "OtUAaNBqRPFK"; // CircuitDigest SMS API Key
+const String phoneNumber = "916307778096"; // Recipient Phone Number (With Country Code)
+const String fixedLocation = "25.4530 N, 78.6098 E"; // Fixed GPS Location
+
+void setup() {
+    Serial.begin(115200);
+    
+    pinMode(vibrationPin, INPUT);
+    pinMode(buzzerPin, OUTPUT);
+    pinMode(switchPin, INPUT_PULLUP); // Internal pull-up resistor for switch
+    pinMode(ledPin, OUTPUT); // Set LED pin as output
+
+    Wire.begin();
+    mpu.initialize();
+
+    // Connect to WiFi
+    WiFi.begin(ssid, password);
+    Serial.print("Connecting to WiFi");
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(1000);
+        Serial.print(".");
+    }
+    Serial.println("\nConnected to WiFi");
+}
+
+void loop() {
+    int vibrationState = readVibrationSensor();
+    
+    // Read accelerometer data
+    int16_t ax, ay, az;
+    mpu.getAcceleration(&ax, &ay, &az);
+    
+    // Check for sudden deceleration and vibration detection
+    if (vibrationState == HIGH && abs(ax) > 4000) { // Adjust threshold if needed
+        alertTriggered = true;
+        alertStartTime = millis();
+        Serial.println("Accident Detected! Alert Triggered.");
+    }
+
+    if (alertTriggered) {
+        digitalWrite(buzzerPin, HIGH); // Turn on buzzer
+        
+        if (millis() - alertStartTime >= 15000) { // Wait 15 seconds
+            sendSMS(101, "Accident Alert", "Accident detected!"); // Template ID 101
+            sendSMS(110, "Device Location", fixedLocation); // Template ID 110
+            alertTriggered = false; // Reset alert
+            digitalWrite(buzzerPin, LOW); // Turn off buzzer
+        }
+    } else {
+        digitalWrite(buzzerPin, LOW); // Ensure buzzer is off if no alert
+    }
+
+    // Reset alert if switch is pressed
+    if (digitalRead(switchPin) == LOW) {
+        alertTriggered = false;
+        digitalWrite(buzzerPin, LOW);
+        Serial.println("Alert Reset by Switch.");
+    }
+
+    delay(100); // Adjust as needed
+}
+
+// Function to read vibration sensor with debounce
+int readVibrationSensor() {
+    int count = 0;
+    for (int i = 0; i < 10; i++) { // Read 10 times
+        if (digitalRead(vibrationPin) == HIGH) count++;
+        delay(10);
+    }
+    return (count > 5) ? HIGH : LOW; // Return HIGH if more than 5 readings detected vibration
+}
+
+// Function to send SMS alert
+void sendSMS(int templateID, String var1, String var2) {
+    if (WiFi.status() == WL_CONNECTED) {
+        HTTPClient http;
+        String url = "https://www.circuitdigest.cloud/send_sms?ID=" + String(templateID); // Use the provided template ID
+        String payload = "{\"mobiles\":\"" + phoneNumber + "\",\"var1\":\"" + var1 + "\",\"var2\":\"" + var2 + "\"}";
+
+        http.begin(url);
+        http.addHeader("Authorization", smsApiKey);
+        http.addHeader("Content-Type", "application/json");
+
+        int httpResponseCode = http.POST(payload);
+        
+        if (httpResponseCode > 0) {
+            Serial.println("SMS Sent Successfully!");
+            Serial.println(httpResponseCode);
+            Serial.println(http.getString());
+            blinkLED(); // Blink LED after sending SMS
+        } else {
+            Serial.print("Error sending SMS: ");
+            Serial.println(httpResponseCode);
+        }
+        
+        http.end();
+    } else {
+        Serial.println("WiFi not connected, SMS not sent.");
+    }
+}
+
+// Function to blink LED after SMS is sent
+void blinkLED() {
+    for (int i = 0; i < 5; i++) { // Blink 5 times
+        digitalWrite(ledPin, HIGH);
+        delay(300);
+        digitalWrite(ledPin, LOW);
+        delay(300);
+    }
+}
+
